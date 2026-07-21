@@ -1,0 +1,3 @@
+region,restriction_period,comparison,comparison_period,r_g_star_km,area_below_km,area_above_km,note
+MA,15 march - 15 may,vs_pre,15 jan - 15 march,5.048614253656751,0.31536004209581137,-0.3158545324758494,
+MA,15 march - 15 may,vs_post,15 may - sept,8.00353436686958,0.36598501324920407,-0.3661339727021341,
