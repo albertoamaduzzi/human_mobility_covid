@@ -275,7 +275,7 @@ def plot_figure_9(csv_path=DIR_DATA / "figure_9.csv", out_dir: Path = DIR_FIGURE
 #   by that single cell -- everywhere else is drowned out and reads as
 #   near-uniform noise. Diverging SymLogNorm colormap centred at zero.
 #
-#   relative=True (default): (density(period_i) - density(baseline)) /
+#   relative=True: (density(period_i) - density(baseline)) /
 #   density(baseline) -- puts every cell on the same proportional footing
 #   regardless of how much baseline mass it started with, so the shift
 #   away from the dominant near-zero bin actually becomes visible. Floored
@@ -285,8 +285,13 @@ def plot_figure_9(csv_path=DIR_DATA / "figure_9.csv", out_dir: Path = DIR_FIGURE
 #   cells can otherwise swing to +500-800% off 1-2 samples). Cells with
 #   zero baseline density are undefined (NaN) and left blank/transparent.
 #
-#   Both variants use a diverging colormap centred at zero: red = more
-#   density than baseline, blue = less.
+#   Both variants use a diverging colormap centred at zero: blue = more
+#   density than baseline, red = less.
+#
+#   plot_figure_2_diff defaults to relative=True; plot_figure_9_diff
+#   defaults to relative=False (absolute). Both accept an explicit
+#   ``relative=`` override, and the *_abs wrappers always force
+#   relative=False regardless of that default.
 # ===========================================================================
 
 def draw_rg_krg_diff(df: pd.DataFrame, baseline: str | None = None, relative: bool = True):
@@ -413,8 +418,8 @@ def plot_figure_2_diff_abs(csv_path=DIR_DATA / "figure_2.csv", out_dir: Path = D
 
 
 def plot_figure_9_diff(csv_path=DIR_DATA / "figure_9.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png",
-                        relative: bool = True) -> Path:
-    """figure_9_diff -- rg_krg change vs baseline period, Massachusetts (relative % by default)."""
+                        relative: bool = False) -> Path:
+    """figure_9_diff -- rg_krg change vs baseline period, Massachusetts (absolute density diff by default)."""
     name = "figure_9_diff" if relative else "figure_9_diff_abs"
     return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=relative), out_dir, name, fmt)
 
