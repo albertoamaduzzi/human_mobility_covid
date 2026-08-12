@@ -259,6 +259,172 @@ def plot_figure_9(csv_path=DIR_DATA / "figure_9.csv", out_dir: Path = DIR_FIGURE
 
 
 # ===========================================================================
+# figure_2_diff / figure_9_diff -- rg_krg, change vs the first period
+#   Same grid as draw_rg_krg (periods x k) built from the same
+#   figure_2.csv / figure_9.csv, but rows 2-3 replace the raw per-period
+#   density heatmap with how it changed relative to the baseline period
+#   ("15 jan - 15 march") on the identical (Rg, k-Rg) bin grid -- row 2 is
+#   during the restriction ("15 march - 15 may"), row 3 is after
+#   ("15 may - sept"). Row 1 keeps the baseline heatmap itself for
+#   reference. Two variants, picked with ``relative``:
+#
+#   relative=False (absolute): density(period_i) - density(baseline), in
+#   the original PDF units. Simple to define, but Rg/k-Rg mass is
+#   extremely concentrated in the smallest bin (~70-90% of the whole
+#   population, in every period), so this reading is completely dominated
+#   by that single cell -- everywhere else is drowned out and reads as
+#   near-uniform noise. Diverging SymLogNorm colormap centred at zero.
+#
+#   relative=True (default): (density(period_i) - density(baseline)) /
+#   density(baseline) -- puts every cell on the same proportional footing
+#   regardless of how much baseline mass it started with, so the shift
+#   away from the dominant near-zero bin actually becomes visible. Floored
+#   at -100% (that cell's population fully disappeared); the colour scale
+#   is capped at the 97th percentile of observed changes with a ">" arrow
+#   for anything clipped above that (a handful of near-empty baseline
+#   cells can otherwise swing to +500-800% off 1-2 samples). Cells with
+#   zero baseline density are undefined (NaN) and left blank/transparent.
+#
+#   Both variants use a diverging colormap centred at zero: red = more
+#   density than baseline, blue = less.
+# ===========================================================================
+
+def draw_rg_krg_diff(df: pd.DataFrame, baseline: str | None = None, relative: bool = True):
+    edges   = np.linspace(RG_KRG_RANGE[0], RG_KRG_RANGE[1], RG_KRG_NBINS + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    Xm, Ym  = np.meshgrid(centers, centers)
+
+    periods = _present_periods(df)
+    if baseline is None:
+        baseline = periods[0]
+    others  = [p for p in periods if p != baseline]
+    list_k  = sorted(int(k) for k in df["k"].unique())
+    base_color = _cycle_colors(periods)[baseline]
+    base_cmap  = mcolors.LinearSegmentedColormap.from_list("baseline_cmap", ["white", base_color])
+    if relative:
+        diff_cmap = mcolors.LinearSegmentedColormap.from_list("relchg_cmap", ["#B2182B", "white", "#2166AC"])
+        diff_cmap.set_bad(alpha=0.0)   # NaN (no baseline mass) -> transparent, not a colour
+    else:
+        diff_cmap = "RdBu"
+
+    n_rows, n_cols = 1 + len(others), len(list_k)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(7 * n_cols, 6 * n_rows + 1),
+                             sharex=True, sharey=True, squeeze=False, constrained_layout=True)
+
+    # -- row 0: baseline period's own heatmap, same convention as draw_rg_krg --
+    row_H_base = {k: _grid_from_sparse(df[(df["period"] == baseline) & (df["k"] == k)],
+                                        "rg_km", "krg_km", "density", centers, centers)
+                  for k in list_k}
+    pos_vals = [H[H > 0] for H in row_H_base.values()]
+    pos_vals = [v for v in pos_vals if v.size]
+    if pos_vals:
+        norm0 = mcolors.LogNorm(vmin=min(v.min() for v in pos_vals), vmax=max(v.max() for v in pos_vals))
+        pcm0 = None
+        for col_idx, k in enumerate(list_k):
+            ax = axes[0][col_idx]
+            H = row_H_base[k]
+            if H.max() <= 0:
+                ax.set_visible(False)
+                continue
+            pcm0 = ax.pcolormesh(Xm, Ym, H, norm=norm0, cmap=base_cmap, shading="auto")
+            ax.set_title(rf"$k={k}$", fontsize=setup_mpl.FONTSIZE_TITLE)
+            if col_idx == 0:
+                ax.set_ylabel(r"$R^k_g$ (km)", fontsize=setup_mpl.FONTSIZE_LABEL)
+        if pcm0 is not None:
+            cbar = fig.colorbar(pcm0, ax=axes[0].tolist(), location="right", fraction=0.03, pad=0.02)
+            cbar.ax.tick_params(labelsize=setup_mpl.FONTSIZE_TICK)
+        axes[0][0].text(-0.35, 0.5, baseline, transform=axes[0][0].transAxes, rotation=90,
+                        va="center", ha="center", fontsize=setup_mpl.FONTSIZE_LABEL)
+    else:
+        for col_idx in range(n_cols):
+            axes[0][col_idx].set_visible(False)
+
+    # -- rows 1..: change vs. baseline, absolute or relative depending on `relative` --
+    diff_grids = {}
+    for p in others:
+        diff_grids[p] = {}
+        for k in list_k:
+            sub = df[(df["period"] == p) & (df["k"] == k)]
+            H  = _grid_from_sparse(sub, "rg_km", "krg_km", "density", centers, centers)
+            Hb = row_H_base[k]
+            if relative:
+                D = np.full_like(Hb, np.nan)
+                has_base = Hb > 0
+                D[has_base] = (H[has_base] - Hb[has_base]) / Hb[has_base]
+            else:
+                D = H - Hb
+            diff_grids[p][k] = D
+
+    all_vals = np.concatenate([D.ravel() for row in diff_grids.values() for D in row.values()]) \
+               if diff_grids else np.array([])
+    diff_norm, cbar_extend, cbar_label, cbar_fmt = None, "neither", r"$\Delta$ density", None
+    if relative:
+        finite = all_vals[np.isfinite(all_vals)]
+        if finite.size:
+            vmax = max(float(np.percentile(np.abs(finite), 97)), 0.5)
+            diff_norm = mcolors.TwoSlopeNorm(vmin=-1.0, vcenter=0.0, vmax=vmax)
+        cbar_extend = "max"
+        cbar_label  = "% change vs. baseline"
+        cbar_fmt    = lambda x, _pos: f"{x:+.0%}"
+    else:
+        nz = all_vals[np.isfinite(all_vals) & (all_vals != 0)]
+        if nz.size:
+            vmax = float(np.max(np.abs(nz)))
+            linthresh = max(float(np.min(np.abs(nz))), vmax * 1e-4)
+            diff_norm = mcolors.SymLogNorm(linthresh=linthresh, vmin=-vmax, vmax=vmax, base=10)
+
+    for row_idx, p in enumerate(others, start=1):
+        pcm_row = None
+        for col_idx, k in enumerate(list_k):
+            ax = axes[row_idx][col_idx]
+            D = diff_grids[p][k]
+            has_data = np.any(np.isfinite(D) & (D != 0)) if relative else np.any(D)
+            if not has_data:
+                ax.set_visible(False)
+                continue
+            pcm_row = ax.pcolormesh(Xm, Ym, D, norm=diff_norm, cmap=diff_cmap, shading="auto")
+            if col_idx == 0:
+                ax.set_ylabel(r"$R^k_g$ (km)", fontsize=setup_mpl.FONTSIZE_LABEL)
+            if row_idx == n_rows - 1:
+                ax.set_xlabel(r"$R_g$ (km)", fontsize=setup_mpl.FONTSIZE_LABEL)
+        if pcm_row is not None:
+            cbar = fig.colorbar(pcm_row, ax=axes[row_idx].tolist(), location="right", fraction=0.03, pad=0.02,
+                                extend=cbar_extend)
+            if cbar_fmt is not None:
+                cbar.ax.yaxis.set_major_formatter(cbar_fmt)
+            cbar.ax.tick_params(labelsize=setup_mpl.FONTSIZE_TICK)
+            cbar.set_label(cbar_label, fontsize=setup_mpl.FONTSIZE_CBAR)
+        axes[row_idx][0].text(-0.35, 0.5, f"{p}\nvs.\n{baseline}", transform=axes[row_idx][0].transAxes,
+                              rotation=90, va="center", ha="center", fontsize=setup_mpl.FONTSIZE_LABEL - 4)
+
+    return fig
+
+
+def plot_figure_2_diff(csv_path=DIR_DATA / "figure_2.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png",
+                        relative: bool = True) -> Path:
+    """figure_2_diff -- rg_krg change vs baseline period, California (relative % by default)."""
+    name = "figure_2_diff" if relative else "figure_2_diff_abs"
+    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=relative), out_dir, name, fmt)
+
+
+def plot_figure_2_diff_abs(csv_path=DIR_DATA / "figure_2.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png") -> Path:
+    """figure_2_diff_abs -- rg_krg absolute density diff vs baseline period, California."""
+    return plot_figure_2_diff(csv_path, out_dir, fmt, relative=False)
+
+
+def plot_figure_9_diff(csv_path=DIR_DATA / "figure_9.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png",
+                        relative: bool = True) -> Path:
+    """figure_9_diff -- rg_krg change vs baseline period, Massachusetts (relative % by default)."""
+    name = "figure_9_diff" if relative else "figure_9_diff_abs"
+    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=relative), out_dir, name, fmt)
+
+
+def plot_figure_9_diff_abs(csv_path=DIR_DATA / "figure_9.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png") -> Path:
+    """figure_9_diff_abs -- rg_krg absolute density diff vs baseline period, Massachusetts."""
+    return plot_figure_9_diff(csv_path, out_dir, fmt, relative=False)
+
+
+# ===========================================================================
 # figure_3 / figure_10 -- st_and_frequency
 #   Mirrors src/check_frequency_st/plot_frequency_st.py
 #   CSV columns: panel [st|frequency], period, time_step, mean_st, std_st,
@@ -593,6 +759,8 @@ def plot_figure_7(csv_path=DIR_DATA / "figure_7.csv", out_dir: Path = DIR_FIGURE
 FIGURE_PLOTTERS = {
     "figure_1":  plot_figure_1,
     "figure_2":  plot_figure_2,
+    "figure_2_diff": plot_figure_2_diff,
+    "figure_2_diff_abs": plot_figure_2_diff_abs,
     "figure_3":  plot_figure_3,
     "figure_4":  plot_figure_4,
     "figure_5":  plot_figure_5,
@@ -600,11 +768,24 @@ FIGURE_PLOTTERS = {
     "figure_7":  plot_figure_7,
     "figure_8":  plot_figure_8,
     "figure_9":  plot_figure_9,
+    "figure_9_diff": plot_figure_9_diff,
+    "figure_9_diff_abs": plot_figure_9_diff_abs,
     "figure_10": plot_figure_10,
     "figure_11": plot_figure_11,
     "figure_12": plot_figure_12,
     "figure_13": plot_figure_13,
 }
+
+# "_diff"/"_diff_abs" figures are derived views of an existing figure's CSV
+# (no CSV of their own) -- map each back to the source figure_<i>.csv to read.
+def _csv_source(name: str) -> str:
+    for suffix in ("_diff_abs", "_diff"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+FIGURE_CSV_SOURCE = {name: _csv_source(name) for name in FIGURE_PLOTTERS}
 
 
 def run(args) -> None:
@@ -618,7 +799,7 @@ def run(args) -> None:
         if plotter is None:
             print(f"  Unknown figure {name!r} -- skipping (choices: {sorted(FIGURE_PLOTTERS)}).")
             continue
-        csv_path = data_dir / f"{name}.csv"
+        csv_path = data_dir / f"{FIGURE_CSV_SOURCE[name]}.csv"
         if not csv_path.exists():
             print(f"  SKIP {name}: {csv_path} not found -- run extract_figure_data.py first.")
             continue
@@ -628,7 +809,8 @@ def run(args) -> None:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Regenerate figure_1.png .. figure_13.png from paper/data/figure_<i>.csv.",
+        description="Regenerate figure_1.png .. figure_13.png (plus figure_2_diff/figure_9_diff) "
+                    "from paper/data/figure_<i>.csv.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--only", nargs="+", default=None, help="Subset of figures to regenerate.")
