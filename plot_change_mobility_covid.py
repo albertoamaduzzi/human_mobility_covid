@@ -288,10 +288,15 @@ def plot_figure_9(csv_path=DIR_DATA / "figure_9.csv", out_dir: Path = DIR_FIGURE
 #   Both variants use a diverging colormap centred at zero: blue = more
 #   density than baseline, red = less.
 #
-#   plot_figure_2_diff defaults to relative=True; plot_figure_9_diff
-#   defaults to relative=False (absolute). Both accept an explicit
-#   ``relative=`` override, and the *_abs wrappers always force
-#   relative=False regardless of that default.
+#   plot_figure_2_diff / plot_figure_9_diff both default to relative=False
+#   (absolute), and always save to figure_2_diff/figure_9_diff regardless
+#   of which value of ``relative`` was actually used -- the filename
+#   tracks the *figure*, not the variant, so re-calling with a different
+#   ``relative=`` overwrites the same file rather than silently landing
+#   somewhere else. The *_abs wrappers are an explicit, default-proof way
+#   to always get the absolute variant (saved to a separate
+#   figure_<i>_diff_abs file), independent of what the plain function's
+#   default happens to be.
 # ===========================================================================
 
 def draw_rg_krg_diff(df: pd.DataFrame, baseline: str | None = None, relative: bool = True):
@@ -406,27 +411,25 @@ def draw_rg_krg_diff(df: pd.DataFrame, baseline: str | None = None, relative: bo
 
 
 def plot_figure_2_diff(csv_path=DIR_DATA / "figure_2.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png",
-                        relative: bool = True) -> Path:
-    """figure_2_diff -- rg_krg change vs baseline period, California (relative % by default)."""
-    name = "figure_2_diff" if relative else "figure_2_diff_abs"
-    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=relative), out_dir, name, fmt)
+                        relative: bool = False) -> Path:
+    """figure_2_diff -- rg_krg change vs baseline period, California (absolute density diff by default)."""
+    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=relative), out_dir, "figure_2_diff", fmt)
 
 
 def plot_figure_2_diff_abs(csv_path=DIR_DATA / "figure_2.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png") -> Path:
-    """figure_2_diff_abs -- rg_krg absolute density diff vs baseline period, California."""
-    return plot_figure_2_diff(csv_path, out_dir, fmt, relative=False)
+    """figure_2_diff_abs -- rg_krg absolute density diff vs baseline period, California (explicit alias)."""
+    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=False), out_dir, "figure_2_diff_abs", fmt)
 
 
 def plot_figure_9_diff(csv_path=DIR_DATA / "figure_9.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png",
                         relative: bool = False) -> Path:
     """figure_9_diff -- rg_krg change vs baseline period, Massachusetts (absolute density diff by default)."""
-    name = "figure_9_diff" if relative else "figure_9_diff_abs"
-    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=relative), out_dir, name, fmt)
+    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=relative), out_dir, "figure_9_diff", fmt)
 
 
 def plot_figure_9_diff_abs(csv_path=DIR_DATA / "figure_9.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png") -> Path:
-    """figure_9_diff_abs -- rg_krg absolute density diff vs baseline period, Massachusetts."""
-    return plot_figure_9_diff(csv_path, out_dir, fmt, relative=False)
+    """figure_9_diff_abs -- rg_krg absolute density diff vs baseline period, Massachusetts (explicit alias)."""
+    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=False), out_dir, "figure_9_diff_abs", fmt)
 
 
 # ===========================================================================
