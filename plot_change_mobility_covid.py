@@ -89,10 +89,10 @@ def _cycle_colors(periods: list) -> dict:
     return {p: cycle[i % len(cycle)] for i, p in enumerate(periods)}
 
 
-def _save(fig, out_dir: Path, name: str, fmt: str = "png") -> Path:
+def _save(fig, out_dir: Path, name: str, fmt: str = "png", transparent: bool = True) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{name}.{fmt}"
-    setup_mpl.save(fig, out_path, fmt=fmt)
+    setup_mpl.save(fig, out_path, fmt=fmt, transparent=transparent)
     plt.close(fig)
     return out_path
 
@@ -299,10 +299,28 @@ def plot_figure_9(csv_path=DIR_DATA / "figure_9.csv", out_dir: Path = DIR_FIGURE
 #   default happens to be.
 # ===========================================================================
 
+# Rotated side labels for the diff figures -- the pandemic framing
+# (pre/during/post restriction) reads better here than the raw period date
+# ranges, and matches the wording used for row 0 (the baseline itself).
+DIFF_BASELINE_LABEL = "Pre-restrictions"
+DIFF_ROW_LABEL = {
+    "15 march - 15 may": "Pre- vs during-restriction",
+    "15 may - sept":     "Pre- vs post-restriction",
+}
+
+
 def draw_rg_krg_diff(df: pd.DataFrame, baseline: str | None = None, relative: bool = True):
     edges   = np.linspace(RG_KRG_RANGE[0], RG_KRG_RANGE[1], RG_KRG_NBINS + 1)
     centers = 0.5 * (edges[:-1] + edges[1:])
     Xm, Ym  = np.meshgrid(centers, centers)
+
+    # A bit bigger than the shared defaults, and axis labels bigger than
+    # tick labels -- applied locally so the other figures are untouched.
+    FS_TITLE    = setup_mpl.FONTSIZE_TITLE + 4
+    FS_LABEL    = setup_mpl.FONTSIZE_LABEL + 5
+    FS_TICK     = setup_mpl.FONTSIZE_TICK + 3
+    FS_CBAR     = setup_mpl.FONTSIZE_CBAR + 4
+    FS_ROWLABEL = FS_LABEL - 2
 
     periods = _present_periods(df)
     if baseline is None:
@@ -315,11 +333,15 @@ def draw_rg_krg_diff(df: pd.DataFrame, baseline: str | None = None, relative: bo
         diff_cmap = mcolors.LinearSegmentedColormap.from_list("relchg_cmap", ["#B2182B", "white", "#2166AC"])
         diff_cmap.set_bad(alpha=0.0)   # NaN (no baseline mass) -> transparent, not a colour
     else:
-        diff_cmap = "RdBu"
+        diff_cmap = plt.get_cmap("RdBu").copy()
+        diff_cmap.set_bad(alpha=0.0)   # NaN (no data in either period) -> transparent, not a colour
 
     n_rows, n_cols = 1 + len(others), len(list_k)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(7 * n_cols, 6 * n_rows + 1),
                              sharex=True, sharey=True, squeeze=False, constrained_layout=True)
+    fig.patch.set_facecolor("white")
+    for ax in axes.flat:
+        ax.set_facecolor("white")
 
     # -- row 0: baseline period's own heatmap, same convention as draw_rg_krg --
     row_H_base = {k: _grid_from_sparse(df[(df["period"] == baseline) & (df["k"] == k)],
@@ -336,15 +358,18 @@ def draw_rg_krg_diff(df: pd.DataFrame, baseline: str | None = None, relative: bo
             if H.max() <= 0:
                 ax.set_visible(False)
                 continue
-            pcm0 = ax.pcolormesh(Xm, Ym, H, norm=norm0, cmap=base_cmap, shading="auto")
-            ax.set_title(rf"$k={k}$", fontsize=setup_mpl.FONTSIZE_TITLE)
+            pcm0 = ax.pcolormesh(Xm, Ym, H, norm=norm0, cmap=base_cmap, shading="auto", zorder=1)
+            ax.set_title(rf"$k={k}$", fontsize=FS_TITLE)
             if col_idx == 0:
-                ax.set_ylabel(r"$R^k_g$ (km)", fontsize=setup_mpl.FONTSIZE_LABEL)
+                ax.set_ylabel(r"$R^k_g$ (km)", fontsize=FS_LABEL)
+            ax.tick_params(labelsize=FS_TICK)
+            ax.grid(True, alpha=0.3, zorder=2)
         if pcm0 is not None:
             cbar = fig.colorbar(pcm0, ax=axes[0].tolist(), location="right", fraction=0.03, pad=0.02)
-            cbar.ax.tick_params(labelsize=setup_mpl.FONTSIZE_TICK)
-        axes[0][0].text(-0.35, 0.5, baseline, transform=axes[0][0].transAxes, rotation=90,
-                        va="center", ha="center", fontsize=setup_mpl.FONTSIZE_LABEL)
+            cbar.ax.tick_params(labelsize=FS_TICK)
+            cbar.set_label("Density", fontsize=FS_CBAR)
+        axes[0][0].text(-0.35, 0.5, DIFF_BASELINE_LABEL, transform=axes[0][0].transAxes, rotation=90,
+                        va="center", ha="center", fontsize=FS_ROWLABEL)
     else:
         for col_idx in range(n_cols):
             axes[0][col_idx].set_visible(False)
@@ -362,7 +387,12 @@ def draw_rg_krg_diff(df: pd.DataFrame, baseline: str | None = None, relative: bo
                 has_base = Hb > 0
                 D[has_base] = (H[has_base] - Hb[has_base]) / Hb[has_base]
             else:
-                D = H - Hb
+                # No density in either period -> undefined, not a real zero-change
+                # reading; mask to NaN (transparent) so the empty region reads as
+                # plain white background, same as row 0's LogNorm-masked cells,
+                # instead of the diff colormap's near-white "no change" shade.
+                no_data = (H <= 0) & (Hb <= 0)
+                D = np.where(no_data, np.nan, H - Hb)
             diff_grids[p][k] = D
 
     all_vals = np.concatenate([D.ravel() for row in diff_grids.values() for D in row.values()]) \
@@ -388,24 +418,27 @@ def draw_rg_krg_diff(df: pd.DataFrame, baseline: str | None = None, relative: bo
         for col_idx, k in enumerate(list_k):
             ax = axes[row_idx][col_idx]
             D = diff_grids[p][k]
-            has_data = np.any(np.isfinite(D) & (D != 0)) if relative else np.any(D)
+            has_data = np.any(np.isfinite(D) & (D != 0))
             if not has_data:
                 ax.set_visible(False)
                 continue
-            pcm_row = ax.pcolormesh(Xm, Ym, D, norm=diff_norm, cmap=diff_cmap, shading="auto")
+            pcm_row = ax.pcolormesh(Xm, Ym, D, norm=diff_norm, cmap=diff_cmap, shading="auto", zorder=1)
             if col_idx == 0:
-                ax.set_ylabel(r"$R^k_g$ (km)", fontsize=setup_mpl.FONTSIZE_LABEL)
+                ax.set_ylabel(r"$R^k_g$ (km)", fontsize=FS_LABEL)
             if row_idx == n_rows - 1:
-                ax.set_xlabel(r"$R_g$ (km)", fontsize=setup_mpl.FONTSIZE_LABEL)
+                ax.set_xlabel(r"$R_g$ (km)", fontsize=FS_LABEL)
+            ax.tick_params(labelsize=FS_TICK)
+            ax.grid(True, alpha=0.3, zorder=2)
         if pcm_row is not None:
             cbar = fig.colorbar(pcm_row, ax=axes[row_idx].tolist(), location="right", fraction=0.03, pad=0.02,
                                 extend=cbar_extend)
             if cbar_fmt is not None:
                 cbar.ax.yaxis.set_major_formatter(cbar_fmt)
-            cbar.ax.tick_params(labelsize=setup_mpl.FONTSIZE_TICK)
-            cbar.set_label(cbar_label, fontsize=setup_mpl.FONTSIZE_CBAR)
-        axes[row_idx][0].text(-0.35, 0.5, f"{p}\nvs.\n{baseline}", transform=axes[row_idx][0].transAxes,
-                              rotation=90, va="center", ha="center", fontsize=setup_mpl.FONTSIZE_LABEL - 4)
+            cbar.ax.tick_params(labelsize=FS_TICK)
+            cbar.set_label(cbar_label, fontsize=FS_CBAR)
+        row_label = DIFF_ROW_LABEL.get(p, f"{p} vs. {baseline}")
+        axes[row_idx][0].text(-0.35, 0.5, row_label, transform=axes[row_idx][0].transAxes,
+                              rotation=90, va="center", ha="center", fontsize=FS_ROWLABEL)
 
     return fig
 
@@ -413,23 +446,27 @@ def draw_rg_krg_diff(df: pd.DataFrame, baseline: str | None = None, relative: bo
 def plot_figure_2_diff(csv_path=DIR_DATA / "figure_2.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png",
                         relative: bool = False) -> Path:
     """figure_2_diff -- rg_krg change vs baseline period, California (absolute density diff by default)."""
-    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=relative), out_dir, "figure_2_diff", fmt)
+    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=relative), out_dir, "figure_2_diff", fmt,
+                 transparent=False)
 
 
 def plot_figure_2_diff_abs(csv_path=DIR_DATA / "figure_2.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png") -> Path:
     """figure_2_diff_abs -- rg_krg absolute density diff vs baseline period, California (explicit alias)."""
-    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=False), out_dir, "figure_2_diff_abs", fmt)
+    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=False), out_dir, "figure_2_diff_abs", fmt,
+                 transparent=False)
 
 
 def plot_figure_9_diff(csv_path=DIR_DATA / "figure_9.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png",
                         relative: bool = False) -> Path:
     """figure_9_diff -- rg_krg change vs baseline period, Massachusetts (absolute density diff by default)."""
-    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=relative), out_dir, "figure_9_diff", fmt)
+    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=relative), out_dir, "figure_9_diff", fmt,
+                 transparent=False)
 
 
 def plot_figure_9_diff_abs(csv_path=DIR_DATA / "figure_9.csv", out_dir: Path = DIR_FIGURES, fmt: str = "png") -> Path:
     """figure_9_diff_abs -- rg_krg absolute density diff vs baseline period, Massachusetts (explicit alias)."""
-    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=False), out_dir, "figure_9_diff_abs", fmt)
+    return _save(draw_rg_krg_diff(pd.read_csv(csv_path), relative=False), out_dir, "figure_9_diff_abs", fmt,
+                 transparent=False)
 
 
 # ===========================================================================
