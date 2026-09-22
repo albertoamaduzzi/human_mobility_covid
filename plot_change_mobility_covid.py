@@ -457,7 +457,7 @@ def draw_sigmaxy(df: pd.DataFrame):
             annotations.append((axis, txt))
         for j, (axis, txt) in enumerate(annotations):
             ax.text(0.03, 0.05 + 0.09 * j, txt, transform=ax.transAxes, ha="left", va="bottom",
-                    color=axis2color[axis], fontsize=FS_LEGEND)
+                    color="black", fontsize=FS_LEGEND)
         ax.set_xlabel(r"$\sigma$ (km)", fontsize=FS_LABEL)
         if idx == 0:
             ax.set_ylabel("PDF", fontsize=FS_LABEL)
@@ -587,6 +587,59 @@ def plot_figure_7(csv_path=DIR_DATA / "figure_7.csv", out_dir: Path = DIR_FIGURE
 
 
 # ===========================================================================
+# figure_4_5_combined -- gonzalez (figure_4) stacked on top of sigmaxy
+# (figure_5) in a single image, California. Does not touch draw_gonzalez /
+# draw_sigmaxy: each is rendered exactly as it is for its own standalone
+# figure, and the two rendered images are stitched together afterwards.
+# ===========================================================================
+
+def _fig_to_rgba(fig, dpi: float) -> np.ndarray:
+    """Rasterise a matplotlib Figure to an (H, W, 4) uint8 RGBA array at *dpi*."""
+    fig.set_dpi(dpi)
+    fig.canvas.draw()
+    return np.asarray(fig.canvas.buffer_rgba())
+
+
+def stack_figures_vertically(figs, dpi: float = setup_mpl.DPI):
+    """Stitch already-built Figures into one, stacked top to bottom.
+
+    Each figure in *figs* is rasterised independently (unchanged) and the
+    resulting images are stacked (narrower ones centre-padded to the widest)
+    into a new Figure sized to match, ready to hand to ``_save``.
+    """
+    arrays = [_fig_to_rgba(f, dpi) for f in figs]
+    for f in figs:
+        plt.close(f)
+
+    width = max(a.shape[1] for a in arrays)
+    padded = []
+    for a in arrays:
+        pad_w = width - a.shape[1]
+        if pad_w:
+            left = pad_w // 2
+            a = np.pad(a, ((0, 0), (left, pad_w - left), (0, 0)))
+        padded.append(a)
+    stacked = np.concatenate(padded, axis=0)
+
+    fig = plt.figure(figsize=(stacked.shape[1] / dpi, stacked.shape[0] / dpi), dpi=dpi)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(stacked)
+    ax.axis("off")
+    return fig
+
+
+def plot_figure_4_5_combined(
+    csv_path_4=DIR_DATA / "figure_4.csv", csv_path_5=DIR_DATA / "figure_5.csv",
+    out_dir: Path = DIR_FIGURES, fmt: str = "png",
+) -> Path:
+    """figure_4_5_combined -- figure_4 (gonzalez) + figure_5 (sigmaxy) stacked into one image, California."""
+    fig_4 = draw_gonzalez(pd.read_csv(csv_path_4))
+    fig_5 = draw_sigmaxy(pd.read_csv(csv_path_5))
+    fig = stack_figures_vertically([fig_4, fig_5])
+    return _save(fig, out_dir, "figure_4_5_combined", fmt)
+
+
+# ===========================================================================
 # Registry + CLI
 # ===========================================================================
 
@@ -606,17 +659,36 @@ FIGURE_PLOTTERS = {
     "figure_13": plot_figure_13,
 }
 
+# Plotters that combine more than one figure_<i>.csv into a single image --
+# handled separately from FIGURE_PLOTTERS since "csv_path = data_dir /
+# f'{name}.csv'" doesn't apply to them. Maps name -> (plotter_fn, [csv stems]).
+COMBINED_PLOTTERS = {
+    "figure_4_5_combined": (plot_figure_4_5_combined, ["figure_4", "figure_5"]),
+}
+
 
 def run(args) -> None:
     setup_mpl.setup()
     data_dir = Path(args.data_dir)
     out_dir  = Path(args.out_dir)
-    targets  = args.only or list(FIGURE_PLOTTERS)
+    targets  = args.only or list(FIGURE_PLOTTERS) + list(COMBINED_PLOTTERS)
 
     for name in targets:
+        if name in COMBINED_PLOTTERS:
+            plotter, deps = COMBINED_PLOTTERS[name]
+            csv_paths = [data_dir / f"{d}.csv" for d in deps]
+            missing = [p for p in csv_paths if not p.exists()]
+            if missing:
+                print(f"  SKIP {name}: {missing} not found -- run extract_figure_data.py first.")
+                continue
+            out_path = plotter(*csv_paths, out_dir)
+            print(f"  Wrote {out_path}")
+            continue
+
         plotter = FIGURE_PLOTTERS.get(name)
         if plotter is None:
-            print(f"  Unknown figure {name!r} -- skipping (choices: {sorted(FIGURE_PLOTTERS)}).")
+            print(f"  Unknown figure {name!r} -- skipping "
+                  f"(choices: {sorted(FIGURE_PLOTTERS) + sorted(COMBINED_PLOTTERS)}).")
             continue
         csv_path = data_dir / f"{name}.csv"
         if not csv_path.exists():
@@ -628,7 +700,8 @@ def run(args) -> None:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Regenerate figure_1.png .. figure_13.png from paper/data/figure_<i>.csv.",
+        description="Regenerate figure_1.png .. figure_13.png (plus figure_4_5_combined.png) "
+                     "from paper/data/figure_<i>.csv.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--only", nargs="+", default=None, help="Subset of figures to regenerate.")
